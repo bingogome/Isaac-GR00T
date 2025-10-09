@@ -37,6 +37,9 @@ from gr00t.data.dataset import (
 from gr00t.data.embodiment_tags import EMBODIMENT_TAG_MAPPING, EmbodimentTag
 from gr00t.utils.misc import any_describe
 
+import warnings
+
+warnings.filterwarnings("ignore")
 
 def print_yellow(text: str) -> None:
     """Print text in yellow color"""
@@ -53,8 +56,8 @@ class ArgsConfig:
     embodiment_tag: Literal[tuple(EMBODIMENT_TAG_MAPPING.keys())] = "gr1"
     """Embodiment tag to use."""
 
-    video_backend: Literal["torchcodec", "decord", "torchvision_av"] = "torchcodec"
-    """Backend to use for video loading, use torchcodec as default."""
+    video_backend: Literal["decord", "torchvision_av"] = "decord"
+    """Backend to use for video loading, use torchvision_av for av encoded videos."""
 
     plot_state_action: bool = False
     """Whether to plot the state and action space."""
@@ -168,6 +171,7 @@ def plot_state_action_space(
         ax.legend(by_label.values(), by_label.keys(), loc="upper right")
 
     plt.tight_layout()
+    plt.savefig("media/plotted_state_action_space.png")
 
 
 def plot_image(image: np.ndarray):
@@ -292,7 +296,7 @@ def load_dataset(
 
     # 6. plot the first 100 images
     images_list = []
-    video_key = video_modality_keys[0]  # we will use the first video modality
+    video_key = video_modality_keys[1]  # we will use the first video modality
 
     state_dict = {key: [] for key in state_modality_keys}
     action_dict = {key: [] for key in action_modality_keys}
@@ -301,8 +305,8 @@ def load_dataset(
     skip_frames = steps // total_images
 
     for i in range(steps):
-        resp = dataset[i]
         if i % skip_frames == 0:
+            resp = dataset[i]
             img = resp[video_key][0]
             # cv2 show the image
             # plot_image(img)
@@ -313,11 +317,12 @@ def load_dataset(
                 print(f"Image {i}")
             images_list.append(img.copy())
 
-        for state_key in state_modality_keys:
-            state_dict[state_key].append(resp[state_key][0])
-        for action_key in action_modality_keys:
-            action_dict[action_key].append(resp[action_key][0])
-        time.sleep(0.05)
+            for state_key in state_modality_keys:
+                state_dict[state_key].append(resp[state_key][0])
+            for action_key in action_modality_keys:
+                action_dict[action_key].append(resp[action_key][0])
+            time.sleep(0.05)
+    print(len(images_list), len(images_list) == total_images)
 
     # convert lists of [np[D]] T size to np(T, D)
     for state_key in state_modality_keys:
@@ -326,16 +331,17 @@ def load_dataset(
         action_dict[action_key] = np.array(action_dict[action_key])
 
     if plot_state_action:
-        plot_state_action_space(state_dict, action_dict)
+        plot_state_action_space(state_dict, action_dict, shared_keys=["single_arm", "gripper"])
         print("Plotted state and action space")
 
     fig, axs = plt.subplots(4, total_images // 4, figsize=(20, 10))
     for i, ax in enumerate(axs.flat):
+        print(i, skip_frames, i * skip_frames)
         ax.imshow(images_list[i])
         ax.axis("off")
         ax.set_title(f"Image {i*skip_frames}")
     plt.tight_layout()  # adjust the subplots to fit into the figure area.
-    plt.show()
+    plt.savefig("media/plotted_images.png")
 
 
 if __name__ == "__main__":

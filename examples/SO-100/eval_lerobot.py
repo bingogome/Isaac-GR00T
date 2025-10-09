@@ -42,10 +42,13 @@ python -m lerobot.replay \
 ```
 """
 
+import json
 import logging
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from pprint import pformat
+from typing import Any
 
 import draccus
 import matplotlib.pyplot as plt
@@ -60,6 +63,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
+    bi_so101_follower
 )
 from lerobot.utils.utils import (
     init_logging,
@@ -71,36 +75,60 @@ from lerobot.utils.utils import (
 # User can just move this single python class method gr00t/eval/service.py
 # to their code or do the following line below
 # sys.path.append(os.path.expanduser("~/Isaac-GR00T/gr00t/eval/"))
-from service import ExternalRobotInferenceClient
+# from service import ExternalRobotInferenceClient
 
-# from gr00t.eval.service import ExternalRobotInferenceClient
+from gr00t.eval.service import ExternalRobotInferenceClient
 
 #################################################################################
 
 
-class Gr00tRobotInferenceClient:
-    """The exact keys used is defined in modality.json
+def _sorted_slices(modality_section: dict[str, Any]) -> list[tuple[str, slice]]:
+    if modality_section is None:
+        return []
+    sorted_modalities = sorted(
+        modality_section.items(), key=lambda item: item[1].get("start", 0)
+    )
+    return [
+        (name, slice(entry["start"], entry["end"])) for name, entry in sorted_modalities
+    ]
 
-    This currently only supports so100_follower, so101_follower
-    modify this code to support other robots with other keys based on modality.json
+
+class Gr00tRobotInferenceClient:
+    """The exact keys used is defined in modality.json.
+
+    Provide a modality.json that matches the robot configuration to map
+    observation and action tensors to the lerobot motor keys.
     """
 
     def __init__(
         self,
         host="localhost",
         port=5555,
-        camera_keys=[],
-        robot_state_keys=[],
+        camera_keys: list[str] | None = None,
+        robot_state_keys: list[str] | None = None,
+        modality_config: dict[str, Any] | None = None,
         show_images=False,
     ):
         self.policy = ExternalRobotInferenceClient(host=host, port=port)
-        self.camera_keys = camera_keys
-        self.robot_state_keys = robot_state_keys
+        self.camera_keys = camera_keys or []
+        self.robot_state_keys = list(robot_state_keys or [])
+        if not modality_config:
+            raise ValueError("A modality configuration is required for policy inference")
+        self.state_modalities = _sorted_slices(modality_config.get("state"))
+        self.action_modalities = _sorted_slices(modality_config.get("action"))
+        self.modality_keys = [name for name, _ in self.action_modalities]
+        total_expected = max((sl.stop for _, sl in self.action_modalities), default=0)
+        if len(self.robot_state_keys) < total_expected:
+            raise ValueError(
+                "robot_state_keys smaller than modality definition. "
+                "Check modality configuration matches robot."
+            )
+        self._action_key_mapping = {
+            name: self.robot_state_keys[slice_obj] for name, slice_obj in self.action_modalities
+        }
         self.show_images = show_images
-        assert (
-            len(robot_state_keys) == 6
-        ), f"robot_state_keys should be size 6, but got {len(robot_state_keys)} "
-        self.modality_keys = ["single_arm", "gripper"]
+        if not self.state_modalities:
+            raise ValueError("State modalities missing from modality configuration")
 
     def get_action(self, observation_dict, lang: str):
         # first add the images
@@ -112,8 +140,8 @@ class Gr00tRobotInferenceClient:
 
         # Make all single float value of dict[str, float] state into a single array
         state = np.array([observation_dict[k] for k in self.robot_state_keys])
-        obs_dict["state.single_arm"] = state[:5].astype(np.float64)
-        obs_dict["state.gripper"] = state[5:6].astype(np.float64)
+        for name, slice_obj in self.state_modalities:
+            obs_dict[f"state.{name}"] = state[slice_obj].astype(np.float64)
         obs_dict["annotation.human.task_description"] = lang
 
         # then add a dummy dimension of np.array([1, ...]) to all the keys (assume history is 1)
@@ -151,13 +179,17 @@ class Gr00tRobotInferenceClient:
         and we want to convert it to a dict[str, float]
         so that we can send it to the robot
         """
-        concat_action = np.concatenate(
-            [np.atleast_1d(action_chunk[f"action.{key}"][idx]) for key in self.modality_keys],
-            axis=0,
-        )
-        assert len(concat_action) == len(self.robot_state_keys), "this should be size 6"
-        # convert the action to dict[str, float]
-        action_dict = {key: concat_action[i] for i, key in enumerate(self.robot_state_keys)}
+        action_dict: dict[str, float] = {}
+        for name in self.modality_keys:
+            action_values = np.atleast_1d(action_chunk[f"action.{name}"][idx])
+            joint_keys = self._action_key_mapping[name]
+            if len(action_values) != len(joint_keys):
+                raise ValueError(
+                    f"Action modality '{name}' expected {len(joint_keys)} values, "
+                    f"but received {len(action_values)}"
+                )
+            for joint_key, joint_value in zip(joint_keys, action_values):
+                action_dict[joint_key] = float(joint_value)
         return action_dict
 
 
@@ -183,6 +215,13 @@ def print_yellow(text):
     print("\033[93m {}\033[00m".format(text))
 
 
+DEFAULT_MODALITY_CONFIGS = {
+    "so100_follower": Path(__file__).with_name("so100__modality.json"),
+    "so101_follower": Path(__file__).with_name("so100__modality.json"),
+    "bi_so101_follower": Path(__file__).with_name("bi_so101_modality.json"),
+}
+
+
 @dataclass
 class EvalConfig:
     robot: RobotConfig  # the robot to use
@@ -193,6 +232,7 @@ class EvalConfig:
     play_sounds: bool = False  # whether to play sounds
     timeout: int = 60  # timeout in seconds
     show_images: bool = False  # whether to show images
+    modality_config_path: str | None = None  # path to modality configuration json
 
 
 @draccus.wrap()
@@ -217,12 +257,27 @@ def eval(cfg: EvalConfig):
     robot_state_keys = list(robot._motors_ft.keys())
     print("robot_state_keys: ", robot_state_keys)
 
+    # load modality configuration matching the robot
+    modality_path = (
+        Path(cfg.modality_config_path)
+        if cfg.modality_config_path
+        else DEFAULT_MODALITY_CONFIGS.get(cfg.robot.type)
+    )
+    if modality_path is None:
+        raise ValueError(
+            "Could not determine modality configuration. Provide --modality-config-path."
+        )
+    with open(modality_path, "r", encoding="utf-8") as f:
+        modality_config = json.load(f)
+
     # Step 2: Initialize the policy
     policy = Gr00tRobotInferenceClient(
         host=cfg.policy_host,
         port=cfg.policy_port,
         camera_keys=camera_keys,
         robot_state_keys=robot_state_keys,
+        modality_config=modality_config,
+        show_images=cfg.show_images,
     )
     log_say(
         "Initializing policy client with language instruction: " + language_instruction,

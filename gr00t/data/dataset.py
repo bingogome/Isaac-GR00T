@@ -581,11 +581,16 @@ class LeRobotSingleDataset(Dataset):
             return self.curr_traj_data
         else:
             chunk_index = self.get_episode_chunk(trajectory_id)
-            parquet_path = self.dataset_path / self.data_path_pattern.format(
-                episode_chunk=chunk_index, episode_index=trajectory_id
+            parquet_path = self.dataset_path / self._format_episode_artifact_path(
+                self.data_path_pattern,
+                chunk_index,
+                trajectory_id,
             )
             assert parquet_path.exists(), f"Parquet file not found at {parquet_path}"
-            return pd.read_parquet(parquet_path)
+            traj_data = pd.read_parquet(parquet_path)
+            self.curr_traj_id = trajectory_id
+            self.curr_traj_data = traj_data
+            return traj_data
 
     def get_trajectory_index(self, trajectory_id: int) -> int:
         """Get the index of the trajectory in the dataset by the trajectory ID.
@@ -607,6 +612,35 @@ class LeRobotSingleDataset(Dataset):
     def get_episode_chunk(self, ep_index: int) -> int:
         """Get the chunk index for an episode index."""
         return ep_index // self.chunk_size
+
+    def _format_episode_artifact_path(
+        self,
+        pattern: str,
+        chunk_index: int,
+        episode_index: int,
+        **extra_kwargs,
+    ) -> str:
+        """Format dataset path patterns across different metadata versions."""
+        format_kwargs = {
+            "episode_chunk": chunk_index,
+            "chunk_index": chunk_index,
+            "chunk": chunk_index,
+            "chunk_id": chunk_index,
+            "chunk_number": chunk_index,
+            "episode_index": episode_index,
+            "episode": episode_index,
+            "episode_id": episode_index,
+            "trajectory_id": episode_index,
+        }
+        format_kwargs.update(extra_kwargs)
+
+        try:
+            return pattern.format(**format_kwargs)
+        except KeyError as err:
+            available_keys = ", ".join(sorted(format_kwargs.keys()))
+            raise KeyError(
+                f"Failed to format '{pattern}' with available keys [{available_keys}]."
+            ) from err
 
     def retrieve_data_and_pad(
         self,
@@ -660,10 +694,18 @@ class LeRobotSingleDataset(Dataset):
         original_key = self.lerobot_modality_meta.video[key].original_key
         if original_key is None:
             original_key = key
-        video_filename = self.video_path_pattern.format(
-            episode_chunk=chunk_index, episode_index=trajectory_id, video_key=original_key
+        video_filename = self._format_episode_artifact_path(
+            self.video_path_pattern,
+            chunk_index,
+            trajectory_id,
+            video_key=original_key,
         )
-        return self.dataset_path / video_filename
+        video_path = self.dataset_path / video_filename
+        if not video_path.exists():
+            raise FileNotFoundError(
+                f"Video file not found for trajectory {trajectory_id}: {video_path}"
+            )
+        return video_path
 
     def get_video(
         self,
@@ -701,7 +743,6 @@ class LeRobotSingleDataset(Dataset):
         timestamp: np.ndarray = self.curr_traj_data["timestamp"].to_numpy()
         # Get the corresponding video timestamps from the step indices
         video_timestamp = timestamp[step_indices]
-
         return get_frames_by_timestamps(
             video_path.as_posix(),
             video_timestamp,
