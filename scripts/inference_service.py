@@ -40,6 +40,7 @@ You can use bore to forward the port to your client: `159.223.171.199` is bore.p
     bore local 8000 --to 159.223.171.199
 """
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -92,6 +93,9 @@ class ArgsConfig:
     http_server: bool = False
     """Whether to run it as HTTP server. Default is ZMQ server."""
 
+    log_level: str = "INFO"
+    """Logging level (e.g., DEBUG, INFO)."""
+
 
 #####################################################################################
 
@@ -139,6 +143,10 @@ def _example_http_client_call(obs: dict, host: str, port: int, api_token: str):
 
 
 def main(args: ArgsConfig):
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     if args.server:
         # Create a policy
         # The `Gr00tPolicy` class is being used to create a policy object that encapsulates
