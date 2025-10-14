@@ -15,7 +15,6 @@
 
 import io
 import json
-import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
@@ -54,25 +53,6 @@ class MsgSerializer:
         return obj
 
 
-def _summarize_value(value: Any) -> str:
-    if isinstance(value, np.ndarray):
-        return f"ndarray{value.shape} dtype={value.dtype}"
-    if isinstance(value, (list, tuple)):
-        length = len(value)
-        if length and isinstance(value[0], np.ndarray):
-            return f"list[{length}] ndarray{value[0].shape}"
-        return f"list[{length}]"
-    if isinstance(value, dict):
-        return f"dict[{len(value)}]"
-    return type(value).__name__
-
-
-def _summarize_dict(data: Any) -> dict[str, str]:
-    if isinstance(data, dict):
-        return {str(k): _summarize_value(v) for k, v in data.items()}
-    return {"value": _summarize_value(data)}
-
-
 @dataclass
 class EndpointHandler:
     handler: Callable
@@ -92,7 +72,6 @@ class BaseInferenceServer:
         self.socket.bind(f"tcp://{host}:{port}")
         self._endpoints: dict[str, EndpointHandler] = {}
         self.api_token = api_token
-        self.logger = logging.getLogger(f"{self.__class__.__name__}")
 
         # Register the ping endpoint by default
         self.register_endpoint("ping", self._handle_ping, requires_input=False)
@@ -131,7 +110,7 @@ class BaseInferenceServer:
 
     def run(self):
         addr = self.socket.getsockopt_string(zmq.LAST_ENDPOINT)
-        self.logger.info("Server is ready and listening on %s", addr)
+        print(f"Server is ready and listening on {addr}")
         while self.running:
             try:
                 message = self.socket.recv()
@@ -150,17 +129,14 @@ class BaseInferenceServer:
                     raise ValueError(f"Unknown endpoint: {endpoint}")
 
                 handler = self._endpoints[endpoint]
-                payload = request.get("data", {})
-                if handler.requires_input:
-                    self.logger.debug("Handling endpoint '%s' with keys: %s", endpoint, _summarize_dict(payload))
-                    result = handler.handler(payload)
-                else:
-                    self.logger.debug("Handling endpoint '%s' (no payload)", endpoint)
-                    result = handler.handler()
+                result = (
+                    handler.handler(request.get("data", {}))
+                    if handler.requires_input
+                    else handler.handler()
+                )
                 self.socket.send(MsgSerializer.to_bytes(result))
-                self.logger.debug("Endpoint '%s' response keys: %s", endpoint, _summarize_dict(result))
             except Exception as e:
-                self.logger.exception("Error while handling request: %s", e)
+                print(f"Error in server: {e}")
                 import traceback
 
                 print(traceback.format_exc())
