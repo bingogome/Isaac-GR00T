@@ -121,4 +121,5 @@ playground/
 # Data
 demo_data/gr00t-gr1-apple-to-shelf/
 tmp/
-output/
+outputs/
+so101-checkpoints
