@@ -60,6 +60,7 @@ from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
     koch_follower,
+    xlerobot,
     make_robot_from_config,
     so100_follower,
     so101_follower,
@@ -219,6 +220,7 @@ DEFAULT_MODALITY_CONFIGS = {
     "so100_follower": Path(__file__).with_name("so100__modality.json"),
     "so101_follower": Path(__file__).with_name("so100__modality.json"),
     "bi_so101_follower": Path(__file__).with_name("bi_so101_modality.json"),
+    "xlerobot": Path(__file__).with_name("xlerobot_modality.json"),
 }
 
 
@@ -252,9 +254,16 @@ def eval(cfg: EvalConfig):
 
     language_instruction = cfg.lang_instruction
 
-    # NOTE: for so100/so101, this should be:
-    # ['shoulder_pan.pos', 'shoulder_lift.pos', 'elbow_flex.pos', 'wrist_flex.pos', 'wrist_roll.pos', 'gripper.pos']
-    robot_state_keys = list(robot._motors_ft.keys())
+    # NOTE: For most robots this aligns with joint/actuator keys; fallback handles legacy private attr.
+    action_feature_map = getattr(robot, "action_features", {}) or {}
+    if action_feature_map:
+        robot_state_keys = list(action_feature_map.keys())
+    elif hasattr(robot, "_motors_ft"):
+        robot_state_keys = list(robot._motors_ft.keys())  # type: ignore[attr-defined]
+    else:
+        raise AttributeError(
+            f"Robot {robot} does not expose action metadata via 'action_features' or '_motors_ft'."
+        )
     print("robot_state_keys: ", robot_state_keys)
 
     # load modality configuration matching the robot

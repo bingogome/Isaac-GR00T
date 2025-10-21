@@ -88,10 +88,10 @@ class ArgsConfig:
     """Whether to resume from a checkpoint."""
 
     # Advanced training parameters
-    learning_rate: float = 1e-4
+    learning_rate: float = 1.2e-5
     """Learning rate for training."""
 
-    weight_decay: float = 1e-5
+    weight_decay: float = 3e-5
     """Weight decay for AdamW optimizer."""
 
     warmup_ratio: float = 0.05
